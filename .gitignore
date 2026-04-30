@@ -1,11 +1,40 @@
+# Python caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environments
+.venv/
+venv/
+.env
+.env.*
+
+# OS/editor files
+.DS_Store
+
+# Generated arrays/images
 *.npy
 *.png
-**/__pycache__/
 
-checkpoints
-experiments
-datasets
-apex
+# Project data, checkpoints, and experiment outputs
+data/
+datasets/
+checkpoints/
+ckpts/
+experiments/
+apex/
+src/pretrained/
+src/depth_models/depth_anything_v2/checkpoints/
+src_bkup/
 
-src/pretrained
-src_bkup
+# Local evaluation outputs
+evaluation/output/
+
+# External local reference symlinks
+eval_pipeline
+run_bs_eval_pipeline
+PromptDA
