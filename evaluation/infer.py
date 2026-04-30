@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,16 +14,16 @@ import torchvision.transforms as T
 from PIL import Image
 from tqdm import tqdm
 
-from dataset import HAMMERDataset
-
 
 EVALUATION_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = EVALUATION_DIR.parent
 SRC_DIR = PROJECT_ROOT / "src"
 
-for path in (str(SRC_DIR), str(SRC_DIR / "model")):
+for path in (str(EVALUATION_DIR), str(SRC_DIR), str(SRC_DIR / "model")):
     if path not in sys.path:
         sys.path.insert(0, path)
+
+from dataset import HAMMERDataset
 
 
 def str2bool(value):
@@ -95,6 +96,11 @@ def parse_arguments():
         type=float,
         default=300.0,
         help="Maximum raw input depth in meters; larger raw values are set to 0",
+    )
+    parser.add_argument(
+        "--intrinsics-path",
+        default="data/HAMMER/intrinsics.txt",
+        help="Path to HAMMER camera intrinsics. Supports 3x3 matrix, fx fy cx cy, or key=value text",
     )
     parser.add_argument(
         "--batch-size",
@@ -243,12 +249,15 @@ def validate_inputs(args):
         args.model_path = str(Path(args.ckpt_dir) / "modelv1.1_best_72epochs.pt")
     else:
         args.model_path = str(resolve_project_path(args.model_path))
+    args.intrinsics_path = str(resolve_project_path(args.intrinsics_path))
 
     missing = []
     if not Path(args.dataset).exists():
         missing.append(args.dataset)
     if not Path(args.model_path).exists():
         missing.append(args.model_path)
+    if not Path(args.intrinsics_path).exists():
+        missing.append(args.intrinsics_path)
 
     link_missing = prepare_weight_links(Path(args.ckpt_dir), args.load_dav2)
     missing.extend(str(path) for path in link_missing)
@@ -263,6 +272,7 @@ def validate_inputs(args):
         print("  - ckpts/pvt.pth")
         if args.load_dav2:
             print("  - ckpts/depth_anything_v2_vitl.pth")
+        print("  - data/HAMMER/intrinsics.txt")
         raise SystemExit(1)
 
     if not torch.cuda.is_available():
@@ -348,6 +358,44 @@ def load_depth_meters(depth_path, depth_scale, max_depth):
     return depth.astype(np.float32)
 
 
+def load_intrinsics(intrinsics_path):
+    text = Path(intrinsics_path).read_text(encoding="utf-8")
+    cleaned_lines = []
+    key_values = {}
+
+    for line in text.splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        cleaned_lines.append(line)
+        match = re.match(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*([-+0-9.eE]+)\s*$", line)
+        if match:
+            key_values[match.group(1).lower()] = float(match.group(2))
+
+    if {"fx", "fy", "cx", "cy"}.issubset(key_values):
+        fx = key_values["fx"]
+        fy = key_values["fy"]
+        cx = key_values["cx"]
+        cy = key_values["cy"]
+        return np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=np.float32)
+
+    numeric_text = "\n".join(cleaned_lines).replace(",", " ")
+    values = [float(value) for value in re.findall(r"[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?", numeric_text)]
+
+    if len(values) == 4:
+        fx, fy, cx, cy = values
+        return np.array([[fx, 0.0, cx], [0.0, fy, cy], [0.0, 0.0, 1.0]], dtype=np.float32)
+    if len(values) == 9:
+        return np.array(values, dtype=np.float32).reshape(3, 3)
+    if len(values) == 16:
+        return np.array(values, dtype=np.float32).reshape(4, 4)[:3, :3]
+
+    raise ValueError(
+        f"Unsupported intrinsics format in {intrinsics_path}. "
+        "Expected 3x3 matrix, 4 values 'fx fy cx cy', or fx/fy/cx/cy key-value lines."
+    )
+
+
 def load_gt_depth_for_vis(depth_path, depth_scale):
     depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
     if depth is None:
@@ -388,11 +436,11 @@ def save_visualization(rgb, raw_depth, pred_depth, gt_depth, output_path, image_
     Image.fromarray(grid).save(output_path)
 
 
-def infer_one(model, rgb_tensor, dep_tensor):
+def infer_one(model, rgb_tensor, dep_tensor, intrinsics):
     sample = {
         "rgb": rgb_tensor,
         "dep": dep_tensor,
-        "K": torch.eye(3, device="cuda").reshape(1, 3, 3),
+        "K": intrinsics,
         "pattern": 0,
     }
 
@@ -446,6 +494,8 @@ def inference(args):
     dataset = HAMMERDataset(args.dataset, args.raw_type)
     total = len(dataset) if args.max_samples is None else min(len(dataset), args.max_samples)
     model = load_model(args)
+    intrinsics_np = load_intrinsics(args.intrinsics_path)
+    intrinsics = torch.from_numpy(intrinsics_np).reshape(1, 3, 3).cuda()
 
     with open(Path(args.output) / "args.json", "w", encoding="utf-8") as file:
         json.dump(vars(args), file, indent=2, ensure_ascii=False)
@@ -458,7 +508,7 @@ def inference(args):
         raw_depth = load_depth_meters(raw_depth_path, args.depth_scale, args.max_depth)
         dep_tensor = torch.from_numpy(raw_depth).unsqueeze(0).unsqueeze(0).cuda()
 
-        pred = infer_one(model, rgb_tensor, dep_tensor)
+        pred = infer_one(model, rgb_tensor, dep_tensor, intrinsics)
         np.save(Path(args.output) / f"{name}.npy", pred)
 
         if args.save_vis:

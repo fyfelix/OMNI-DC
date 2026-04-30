@@ -15,6 +15,7 @@ Environment overrides:
   CHECKPOINT       OMNI-DC checkpoint. Default: ckpts/modelv1.1_best_72epochs.pt
   CKPT_DIR         Directory for dependency checkpoints. Default: ckpts
   DATASET_PATH     HAMMER JSONL path. Default: data/HAMMER/test.jsonl
+  INTRINSICS_PATH  HAMMER intrinsics path. Default: data/HAMMER/intrinsics.txt
   OUTPUT_DIR       Prediction/evaluation output directory. Default: evaluation/output
   RAW_TYPE         HAMMER raw depth source: d435, l515, tof. Default: d435
   BATCH_SIZE       Kept for compatibility; inference runs one image at a time. Default: 1
@@ -49,6 +50,7 @@ fi
 ckpt_dir="${CKPT_DIR:-ckpts}"
 checkpoint="${1:-${CHECKPOINT:-${ckpt_dir}/modelv1.1_best_72epochs.pt}}"
 dataset_path="${DATASET_PATH:-data/HAMMER/test.jsonl}"
+intrinsics_path="${INTRINSICS_PATH:-data/HAMMER/intrinsics.txt}"
 output_dir="${OUTPUT_DIR:-evaluation/output}"
 raw_type="${RAW_TYPE:-d435}"
 batch_size="${BATCH_SIZE:-1}"
@@ -60,6 +62,7 @@ max_samples="${MAX_SAMPLES:-}"
 checkpoint="$(resolve_path "${checkpoint}")"
 ckpt_dir="$(resolve_path "${ckpt_dir}")"
 dataset_path="$(resolve_path "${dataset_path}")"
+intrinsics_path="$(resolve_path "${intrinsics_path}")"
 output_dir="$(resolve_path "${output_dir}")"
 
 echo "project root: ${PROJECT_ROOT}"
@@ -67,6 +70,7 @@ echo "model: OMNI-DC OGNIDC v1.1"
 echo "checkpoint: ${checkpoint}"
 echo "ckpt dir: ${ckpt_dir}"
 echo "dataset path: ${dataset_path}"
+echo "intrinsics path: ${intrinsics_path}"
 echo "raw type: ${raw_type}"
 echo "output dir: ${output_dir}"
 echo "save vis: ${save_vis}"
@@ -77,6 +81,7 @@ infer_args=(
     --model-path "${checkpoint}"
     --ckpt-dir "${ckpt_dir}"
     --dataset "${dataset_path}"
+    --intrinsics-path "${intrinsics_path}"
     --raw-type "${raw_type}"
     --output "${output_dir}"
     --batch-size "${batch_size}"
