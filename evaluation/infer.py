@@ -62,7 +62,7 @@ def parse_arguments():
         "--checkpoint",
         dest="model_path",
         default=None,
-        help="Path to OMNI-DC checkpoint. Defaults to ckpts/modelv1.1_best_72epochs.pt",
+        help="Path to OMNI-DC checkpoint. Defaults to <ckpt-dir>/modelv1.1_best_72epochs.pt",
     )
     parser.add_argument(
         "--ckpt-dir",
@@ -71,13 +71,18 @@ def parse_arguments():
     )
     parser.add_argument(
         "--dataset",
-        default="data/HAMMER/test.jsonl",
+        default="data/HAMMER/test_filled_d435.jsonl",
         help="HAMMER JSONL dataset path",
     )
     parser.add_argument(
         "--output",
         default="evaluation/output",
-        help="Output directory for predictions and args.json",
+        help="Run metadata output directory. Prediction/visualization directories fall back here when omitted",
+    )
+    parser.add_argument(
+        "--prediction-dir",
+        default=None,
+        help="Directory for prediction .npy files. Defaults to --output",
     )
     parser.add_argument(
         "--raw-type",
@@ -117,8 +122,8 @@ def parse_arguments():
     parser.add_argument(
         "--max-samples",
         type=int,
-        default=None,
-        help="Optional smoke-test limit",
+        default=0,
+        help="Sample limit. 0 evaluates all samples",
     )
     parser.add_argument(
         "--encoder",
@@ -156,9 +161,11 @@ def parse_arguments():
         help="Disable visualization grids",
     )
     parser.add_argument(
+        "--visualization-dir",
         "--vis-dir",
+        dest="visualization_dir",
         default=None,
-        help="Visualization directory. Defaults to <output>/visualizations",
+        help="Visualization directory. Defaults to --output",
     )
     parser.add_argument(
         "--load-dav2",
@@ -167,7 +174,10 @@ def parse_arguments():
         help="Use OMNI-DC v1.1 Depth Anything V2 auxiliary depth",
     )
     parser.set_defaults(save_vis=True)
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.max_samples < 0:
+        parser.error("--max-samples must be 0 or a positive integer")
+    return args
 
 
 def default_model_args(load_dav2=True):
@@ -244,6 +254,14 @@ def validate_inputs(args):
     args.dataset = str(resolve_project_path(args.dataset))
     args.output = str(resolve_project_path(args.output))
     args.ckpt_dir = str(resolve_project_path(args.ckpt_dir))
+    if args.prediction_dir is None:
+        args.prediction_dir = args.output
+    else:
+        args.prediction_dir = str(resolve_project_path(args.prediction_dir))
+    if args.visualization_dir is None:
+        args.visualization_dir = args.output
+    else:
+        args.visualization_dir = str(resolve_project_path(args.visualization_dir))
 
     if args.model_path is None:
         args.model_path = str(Path(args.ckpt_dir) / "modelv1.1_best_72epochs.pt")
@@ -279,10 +297,9 @@ def validate_inputs(args):
         raise SystemExit("CUDA is required for this OMNI-DC evaluation adapter.")
 
     Path(args.output).mkdir(parents=True, exist_ok=True)
+    Path(args.prediction_dir).mkdir(parents=True, exist_ok=True)
     if args.save_vis:
-        vis_dir = Path(args.vis_dir) if args.vis_dir else Path(args.output) / "visualizations"
-        args.vis_dir = str(resolve_project_path(vis_dir))
-        Path(args.vis_dir).mkdir(parents=True, exist_ok=True)
+        Path(args.visualization_dir).mkdir(parents=True, exist_ok=True)
 
     return args
 
@@ -492,7 +509,7 @@ def inference(args):
         raise ValueError(f"Invalid dataset: {args.dataset}")
 
     dataset = HAMMERDataset(args.dataset, args.raw_type)
-    total = len(dataset) if args.max_samples is None else min(len(dataset), args.max_samples)
+    total = len(dataset) if args.max_samples == 0 else min(len(dataset), args.max_samples)
     model = load_model(args)
     intrinsics_np = load_intrinsics(args.intrinsics_path)
     intrinsics = torch.from_numpy(intrinsics_np).reshape(1, 3, 3).cuda()
@@ -509,7 +526,7 @@ def inference(args):
         dep_tensor = torch.from_numpy(raw_depth).unsqueeze(0).unsqueeze(0).cuda()
 
         pred = infer_one(model, rgb_tensor, dep_tensor, intrinsics)
-        np.save(Path(args.output) / f"{name}.npy", pred)
+        np.save(Path(args.prediction_dir) / f"{name}.npy", pred)
 
         if args.save_vis:
             gt_depth = load_gt_depth_for_vis(gt_depth_path, args.depth_scale)
@@ -518,7 +535,7 @@ def inference(args):
                 raw_depth,
                 pred,
                 gt_depth,
-                Path(args.vis_dir) / f"{name}_grid.jpg",
+                Path(args.visualization_dir) / f"{name}_promptda_vis.jpg",
                 args.image_min,
                 args.image_max,
             )

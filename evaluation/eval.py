@@ -41,7 +41,13 @@ def parse_arguments():
         "--output",
         type=str,
         default="output_dir",
-        help="Prediction output directory",
+        help="Directory for metrics and eval_args.json",
+    )
+    parser.add_argument(
+        "--prediction-dir",
+        type=str,
+        default=None,
+        help="Directory containing prediction .npy files. Defaults to --output",
     )
     parser.add_argument(
         "--raw-type", type=str, required=True, choices=["d435", "l515", "tof"], help="Raw type"
@@ -67,10 +73,13 @@ def parse_arguments():
     parser.add_argument(
         "--max-samples",
         type=int,
-        default=None,
-        help="Optional smoke-test sample limit",
+        default=0,
+        help="Sample limit. 0 evaluates all samples",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.max_samples < 0:
+        parser.error("--max-samples must be 0 or a positive integer")
+    return args
 
 
 def load_gt_depth(depth_path, depth_scale, max_depth,min_depth):
@@ -146,7 +155,13 @@ args = parse_arguments()
 import pandas as pd
 
 
-prediction_path = args.output
+from os import makedirs
+
+
+output_path = args.output
+prediction_path = args.prediction_dir or args.output
+args.prediction_dir = prediction_path
+makedirs(output_path, exist_ok=True)
 
 depth_scale = 1000.0
 
@@ -155,11 +170,11 @@ if 'hammer' in args.dataset.lower():
 else:
     raise ValueError(f"Invalid dataset: {args.dataset}")
 
-if args.max_samples is not None:
+if args.max_samples > 0:
     dataset.data = dataset.data[:args.max_samples]
 
 
-with open(join(prediction_path, 'eval_args.json'), 'w') as f:
+with open(join(output_path, 'eval_args.json'), 'w') as f:
     json.dump(vars(args), f)
 
 
@@ -235,7 +250,8 @@ all_metrics_mean = all_metrics.mean(numeric_only=True).to_frame().T
 
 
 
-all_metrics.to_csv(join(prediction_path,f'all_metrics_{current_time}_{ALIGN}.csv'), index=False)
-all_metrics_mean.to_json(join(prediction_path, f'mean_metrics_{current_time}_{ALIGN}.json'), orient='records', lines=True, force_ascii=False)
+all_metrics.to_csv(join(output_path,f'all_metrics_{current_time}_{ALIGN}.csv'), index=False)
+all_metrics_mean.to_json(join(output_path, f'mean_metrics_{current_time}_{ALIGN}.json'), orient='records', lines=True, force_ascii=False)
 from loguru import logger
-logger.info(f'save dir: {prediction_path}')
+logger.info(f'save dir: {output_path}')
+logger.info(f'prediction dir: {prediction_path}')

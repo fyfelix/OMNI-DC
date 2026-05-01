@@ -24,7 +24,7 @@ ckpts/
 HAMMER 数据默认放在：
 
 ```text
-data/HAMMER/test.jsonl
+data/HAMMER/test_filled_d435.jsonl
 data/HAMMER/intrinsics.txt
 ```
 
@@ -64,15 +64,15 @@ cy=...
 ```text
 CHECKPOINT       主 checkpoint，默认 ckpts/modelv1.1_best_72epochs.pt
 CKPT_DIR         依赖权重目录，默认 ckpts
-DATASET_PATH     HAMMER JSONL，默认 data/HAMMER/test.jsonl
+DATASET_PATH     HAMMER JSONL，默认 data/HAMMER/test_filled_d435.jsonl
 INTRINSICS_PATH  HAMMER 相机内参，默认 data/HAMMER/intrinsics.txt
-OUTPUT_DIR       输出目录，默认 evaluation/output
+OUTPUT_DIR       基础输出根目录，默认 evaluation/output
 RAW_TYPE         d435/l515/tof，默认 d435
 BATCH_SIZE       保留兼容参数；当前适配逐张推理，默认 1
 NUM_WORKERS      保留兼容参数，默认 0
 SAVE_VIS         是否保存可视化，默认 true
 CLEANUP_NPY      是否在评估后删除 .npy，默认 false
-MAX_SAMPLES      可选 smoke-test 样本数
+MAX_SAMPLES      样本上限，0 表示全量，默认 0
 PYTHON_BIN       Python 可执行文件，默认 python
 ```
 
@@ -80,28 +80,35 @@ PYTHON_BIN       Python 可执行文件，默认 python
 
 ```bash
 RAW_TYPE=l515 \
-DATASET_PATH=data/HAMMER/test.jsonl \
+DATASET_PATH=data/HAMMER/test_filled_d435.jsonl \
 OUTPUT_DIR=evaluation/output_l515 \
 ./evaluation/run_eval.sh
 ```
 
 ## 输出
 
-默认输出到 `evaluation/output`：
+`OUTPUT_DIR` 表示基础输出根目录。每次运行会生成 `evaluation/output/<timestamp>/`，时间戳格式为 `YYYY-mm-dd_HH-MM-SS`：
 
 ```text
-args.json
-eval_args.json
-*.npy
-visualizations/*_grid.jpg
-all_metrics_*.csv
-mean_metrics_*.json
+evaluation/output/<timestamp>/
+  args.json
+  eval_args.json
+  predictions/*.npy
+  visualizations/*_promptda_vis.jpg
+  all_metrics_*.csv
+  mean_metrics_*.json
 ```
 
 其中 `*.npy` 是 `HxW float32` metric depth，单位 meter，供 `evaluation/eval.py` 直接读取。默认会保留预测 `.npy`，并保存可视化 grid；如需关闭可视化：
 
 ```bash
 SAVE_VIS=false ./evaluation/run_eval.sh
+```
+
+如需快速检查前 N 条样本：
+
+```bash
+MAX_SAMPLES=1 SAVE_VIS=true ./evaluation/run_eval.sh
 ```
 
 ## 当前适配细节

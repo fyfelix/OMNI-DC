@@ -14,16 +14,25 @@ Usage:
 Environment overrides:
   CHECKPOINT       OMNI-DC checkpoint. Default: ckpts/modelv1.1_best_72epochs.pt
   CKPT_DIR         Directory for dependency checkpoints. Default: ckpts
-  DATASET_PATH     HAMMER JSONL path. Default: data/HAMMER/test.jsonl
+  DATASET_PATH     HAMMER JSONL path. Default: data/HAMMER/test_filled_d435.jsonl
   INTRINSICS_PATH  HAMMER intrinsics path. Default: data/HAMMER/intrinsics.txt
-  OUTPUT_DIR       Prediction/evaluation output directory. Default: evaluation/output
+  OUTPUT_DIR       Base output root. Default: evaluation/output
   RAW_TYPE         HAMMER raw depth source: d435, l515, tof. Default: d435
   BATCH_SIZE       Kept for compatibility; inference runs one image at a time. Default: 1
   NUM_WORKERS      Kept for compatibility. Default: 0
   SAVE_VIS         Save visualization grids by default. true/false. Default: true
   CLEANUP_NPY      Remove prediction .npy files after evaluation. Default: false
-  MAX_SAMPLES      Optional smoke-test sample limit.
+  MAX_SAMPLES      Sample limit. 0 evaluates all samples. Default: 0
   PYTHON_BIN       Python executable. Default: python
+
+Output layout:
+  OUTPUT_DIR/YYYY-mm-dd_HH-MM-SS/
+    args.json
+    eval_args.json
+    predictions/*.npy
+    visualizations/*_promptda_vis.jpg
+    all_metrics_*.csv
+    mean_metrics_*.json
 
 Required default files under ckpts/:
   modelv1.1_best_72epochs.pt
@@ -49,7 +58,7 @@ fi
 
 ckpt_dir="${CKPT_DIR:-ckpts}"
 checkpoint="${1:-${CHECKPOINT:-${ckpt_dir}/modelv1.1_best_72epochs.pt}}"
-dataset_path="${DATASET_PATH:-data/HAMMER/test.jsonl}"
+dataset_path="${DATASET_PATH:-data/HAMMER/test_filled_d435.jsonl}"
 intrinsics_path="${INTRINSICS_PATH:-data/HAMMER/intrinsics.txt}"
 output_dir="${OUTPUT_DIR:-evaluation/output}"
 raw_type="${RAW_TYPE:-d435}"
@@ -57,13 +66,17 @@ batch_size="${BATCH_SIZE:-1}"
 num_workers="${NUM_WORKERS:-0}"
 save_vis="${SAVE_VIS:-true}"
 cleanup_npy="${CLEANUP_NPY:-false}"
-max_samples="${MAX_SAMPLES:-}"
+max_samples="${MAX_SAMPLES:-0}"
+timestamp="$(date '+%Y-%m-%d_%H-%M-%S')"
 
 checkpoint="$(resolve_path "${checkpoint}")"
 ckpt_dir="$(resolve_path "${ckpt_dir}")"
 dataset_path="$(resolve_path "${dataset_path}")"
 intrinsics_path="$(resolve_path "${intrinsics_path}")"
 output_dir="$(resolve_path "${output_dir}")"
+run_output_dir="${output_dir}/${timestamp}"
+prediction_dir="${run_output_dir}/predictions"
+visualization_dir="${run_output_dir}/visualizations"
 
 echo "project root: ${PROJECT_ROOT}"
 echo "model: OMNI-DC OGNIDC v1.1"
@@ -72,9 +85,13 @@ echo "ckpt dir: ${ckpt_dir}"
 echo "dataset path: ${dataset_path}"
 echo "intrinsics path: ${intrinsics_path}"
 echo "raw type: ${raw_type}"
-echo "output dir: ${output_dir}"
+echo "output root: ${output_dir}"
+echo "run output dir: ${run_output_dir}"
+echo "prediction dir: ${prediction_dir}"
+echo "visualization dir: ${visualization_dir}"
 echo "save vis: ${save_vis}"
 echo "cleanup npy: ${cleanup_npy}"
+echo "max samples: ${max_samples}"
 
 infer_args=(
     "${SCRIPT_DIR}/infer.py"
@@ -83,9 +100,12 @@ infer_args=(
     --dataset "${dataset_path}"
     --intrinsics-path "${intrinsics_path}"
     --raw-type "${raw_type}"
-    --output "${output_dir}"
+    --output "${run_output_dir}"
+    --prediction-dir "${prediction_dir}"
+    --visualization-dir "${visualization_dir}"
     --batch-size "${batch_size}"
     --num-workers "${num_workers}"
+    --max-samples "${max_samples}"
 )
 
 eval_args=(
@@ -93,14 +113,11 @@ eval_args=(
     --encoder vitl
     --model-path "${checkpoint}"
     --dataset "${dataset_path}"
-    --output "${output_dir}"
+    --output "${run_output_dir}"
+    --prediction-dir "${prediction_dir}"
     --raw-type "${raw_type}"
+    --max-samples "${max_samples}"
 )
-
-if [[ -n "${max_samples}" ]]; then
-    infer_args+=(--max-samples "${max_samples}")
-    eval_args+=(--max-samples "${max_samples}")
-fi
 
 if [[ "${save_vis}" == "false" || "${save_vis}" == "0" ]]; then
     infer_args+=(--no-save-vis)
@@ -114,6 +131,6 @@ echo "evaluating the model on HAMMER"
 time "${PYTHON_BIN}" "${eval_args[@]}"
 
 if [[ "${cleanup_npy}" == "true" || "${cleanup_npy}" == "1" ]]; then
-    echo "CLEANUP_NPY is enabled, removing generated .npy files under ${output_dir}"
-    find "${output_dir}" -maxdepth 1 -type f -name '*.npy' -delete
+    echo "CLEANUP_NPY is enabled, removing generated .npy files under ${prediction_dir}"
+    find "${prediction_dir}" -maxdepth 1 -type f -name '*.npy' -delete
 fi
