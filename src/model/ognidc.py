@@ -24,6 +24,14 @@ dav2_model_configs = {
     'vitg': {'encoder': 'vitg', 'features': 384, 'out_channels': [1536, 1536, 1536, 1536]}
 }
 
+
+def torch_load_compatible(path, **kwargs):
+    try:
+        return torch.load(path, weights_only=False, **kwargs)
+    except TypeError:
+        return torch.load(path, **kwargs)
+
+
 def upsample_depth(depth, mask, r=8):
     """ Upsample depth field [H/r, W/r, 2] -> [H, W, 2] using convex combination """
     N, _, H, W = depth.shape  # B x 1 x H x W
@@ -63,8 +71,8 @@ class OGNIDC(nn.Module, PyTorchModelHubMixin):
 
             self.depth_module = DepthAnythingV2(**dav2_model_configs[encoder])
             self.depth_module.load_state_dict(
-                torch.load(f'./depth_models/depth_anything_v2/checkpoints/depth_anything_v2_{encoder}.pth',
-                           map_location='cpu'))
+                torch_load_compatible(f'./depth_models/depth_anything_v2/checkpoints/depth_anything_v2_{encoder}.pth',
+                                      map_location='cpu'))
             self.depth_module = self.depth_module.eval()
 
             # freeze foundation model

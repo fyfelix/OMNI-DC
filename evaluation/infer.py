@@ -52,6 +52,13 @@ def display_path(path):
         return str(path)
 
 
+def torch_load_compatible(path, **kwargs):
+    try:
+        return torch.load(path, weights_only=False, **kwargs)
+    except TypeError:
+        return torch.load(path, **kwargs)
+
+
 def parse_arguments():
     parser = argparse.ArgumentParser(
         description="OMNI-DC OGNIDC v1.1 inference for HAMMER evaluation",
@@ -317,7 +324,7 @@ def load_model(args):
     finally:
         os.chdir(cwd)
 
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint = torch_load_compatible(checkpoint_path, map_location="cpu")
     if isinstance(checkpoint, dict) and "net" in checkpoint:
         states = checkpoint["net"]
     elif isinstance(checkpoint, dict) and "model" in checkpoint:

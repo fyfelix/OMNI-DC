@@ -17,10 +17,33 @@ model_path = {
 }
 
 
+def torch_load_compatible(path, **kwargs):
+    try:
+        return torch.load(path, weights_only=False, **kwargs)
+    except TypeError:
+        return torch.load(path, **kwargs)
+
+
+def checkpoint_state_dict(checkpoint):
+    if isinstance(checkpoint, dict):
+        for key in ('state_dict', 'model', 'net'):
+            if key in checkpoint and isinstance(checkpoint[key], dict):
+                checkpoint = checkpoint[key]
+                break
+
+    if isinstance(checkpoint, dict):
+        return {
+            key[7:] if isinstance(key, str) and key.startswith('module.') else key: value
+            for key, value in checkpoint.items()
+        }
+
+    return checkpoint
+
+
 def get_resnet18(pretrained=True):
     net = torchvision.models.resnet18(pretrained=False)
     if pretrained:
-        state_dict = torch.load(model_path['resnet18'])
+        state_dict = torch_load_compatible(model_path['resnet18'], map_location='cpu')
         net.load_state_dict(state_dict)
 
     return net
@@ -30,7 +53,7 @@ def get_resnet34(pretrained=True):
     net = torchvision.models.resnet34(pretrained=False)
     if pretrained:
         # state_dict = torch.load(model_path['resnet34'], map_location=torch.device("cuda:0"))
-        state_dict = torch.load(model_path['resnet34'])
+        state_dict = torch_load_compatible(model_path['resnet34'], map_location='cpu')
         net.load_state_dict(state_dict)
 
     return net
@@ -236,10 +259,17 @@ class PyramidVisionTransformer(nn.Module):
         self.init_weights(pretrained)
 
     def init_weights(self, pretrained=None):
-        if isinstance(pretrained, str):
+        if isinstance(pretrained, (str, Path)):
+            pretrained = str(pretrained)
             logger = get_root_logger()
             logger.setLevel('ERROR')
-            load_checkpoint(self, pretrained, map_location='cpu', strict=False, logger=logger)
+            try:
+                load_checkpoint(self, pretrained, map_location='cpu', strict=False, logger=logger)
+            except RuntimeError as error:
+                if 'weights_only' not in str(error):
+                    raise
+                checkpoint = torch_load_compatible(pretrained, map_location='cpu')
+                self.load_state_dict(checkpoint_state_dict(checkpoint), strict=False)
             print("===pretrained weight loaded===")
 
     def _init_weights(self, m):
@@ -320,5 +350,3 @@ class PVT(PyramidVisionTransformer):
             backbone_pattern_condition_format=kwargs['backbone_pattern_condition_format'],
             num_pattern_types=kwargs['num_pattern_types']
         )
-
-
