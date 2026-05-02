@@ -1,6 +1,6 @@
-# OMNI-DC HAMMER Evaluation
+# OMNI-DC HAMMER / ClearPose Evaluation
 
-这个目录是在 OMNI-DC 外部项目根目录中适配的 HAMMER 评估入口。评估代码复用 `run_bs_eval_pipeline` 的 `dataset.py`、`eval.py` 和 `utils/metric.py`，模型推理侧固定适配 OMNI-DC README 推荐的 `OGNIDC` v1.1 RGB-D depth completion 配置。
+这个目录是在 OMNI-DC 外部项目根目录中适配的 HAMMER / ClearPose 评估入口。评估代码复用 `run_bs_eval_pipeline` 的 `dataset.py`、`eval.py` 和 `utils/metric.py`，模型推理侧固定适配 OMNI-DC README 推荐的 `OGNIDC` v1.1 RGB-D depth completion 配置。
 
 ## 需要准备的文件
 
@@ -29,6 +29,14 @@ data/HAMMER/intrinsics.txt
 ```
 
 JSONL 中引用的 `rgb`、`d435_depth`、`l515_depth`、`tof_depth`、`depth` 文件需要能相对 `data/HAMMER/` 访问。raw depth 和 GT depth 默认按 `uint_depth / 1000.0` 转成 meter。
+
+ClearPose 可通过 `DATASET_PATH` 指向 JSONL，例如：
+
+```text
+data/clearpose/test.jsonl
+```
+
+ClearPose JSONL 中的 `rgb`、`rgb-suffix`、`raw_depth-suffix`、`depth-suffix` 会展开为逐帧 RGB、raw depth 和 GT depth 文件。ClearPose 只支持 `RAW_TYPE=d435`。
 
 `intrinsics.txt` 支持以下任一格式：
 
@@ -64,10 +72,10 @@ cy=...
 ```text
 CHECKPOINT       主 checkpoint，默认 ckpts/modelv1.1_best_72epochs.pt
 CKPT_DIR         依赖权重目录，默认 ckpts
-DATASET_PATH     HAMMER JSONL，默认 data/HAMMER/test_filled_d435.jsonl
-INTRINSICS_PATH  HAMMER 相机内参，默认 data/HAMMER/intrinsics.txt
+DATASET_PATH     HAMMER 或 ClearPose JSONL，默认 data/HAMMER/test_filled_d435.jsonl
+INTRINSICS_PATH  相机内参，默认 data/HAMMER/intrinsics.txt
 OUTPUT_DIR       基础输出根目录，默认 evaluation/output
-RAW_TYPE         d435/l515/tof，默认 d435
+RAW_TYPE         d435/l515/tof，默认 d435；ClearPose only supports d435
 BATCH_SIZE       保留兼容参数；当前适配逐张推理，默认 1
 NUM_WORKERS      保留兼容参数，默认 0
 SAVE_VIS         是否保存可视化，默认 true
@@ -85,12 +93,22 @@ OUTPUT_DIR=evaluation/output_l515 \
 ./evaluation/run_eval.sh
 ```
 
+ClearPose 示例：
+
+```bash
+DATASET_PATH=data/clearpose/test.jsonl \
+OUTPUT_DIR=/tmp/cdm_clearpose_eval_out \
+BATCH_SIZE=16 \
+NUM_WORKERS=4 \
+./evaluation/run_eval.sh /path/to/step_40000.ckpt
+```
+
 ## 输出
 
-`OUTPUT_DIR` 表示基础输出根目录。每次运行会生成 `evaluation/output/<timestamp>/`，时间戳格式为 `YYYY-mm-dd_HH-MM-SS`：
+`OUTPUT_DIR` 表示基础输出根目录。每次运行会生成 `evaluation/output/<hammer|clearpose>_<timestamp>/`，时间戳格式为 `YYYY-mm-dd_HH-MM-SS`：
 
 ```text
-evaluation/output/<timestamp>/
+evaluation/output/<hammer|clearpose>_<timestamp>/
   args.json
   eval_args.json
   predictions/*.npy
@@ -114,10 +132,11 @@ MAX_SAMPLES=1 SAVE_VIS=true ./evaluation/run_eval.sh
 ## 当前适配细节
 
 - 模型固定为 OMNI-DC `OGNIDC` v1.1。
-- 输入为 RGB-D depth completion；RGB 使用官方 demo 的 ImageNet normalize，raw depth 使用 HAMMER 的 `d435/l515/tof` 字段。
-- 相机内参从 `data/HAMMER/intrinsics.txt` 读取，并作为 `sample["K"]` 传入模型。
+- 输入为 RGB-D depth completion；RGB 使用官方 demo 的 ImageNet normalize，HAMMER raw depth 使用 `d435/l515/tof` 字段，ClearPose raw depth 使用 JSONL suffix 展开得到的 `d435` raw depth。
+- 相机内参从 `INTRINSICS_PATH` 读取，并作为 `sample["K"]` 传入模型。
 - 默认参数包括 `load_dav2=1`、`num_resolution=3`、`backbone_mode=rgbd`、`depth_activation_format=exp`、`whiten_sparse_depths=1`。
 - 推理时按官方 demo/test 逻辑 pad 到 `4 * 2 ** (num_resolution - 1)` 的倍数，输出后 crop 回原图大小。
 - 模型输出 `output["pred"]` 已按 meter 表示；本适配不做 disparity/inverse depth 转换，也不做 alignment。
 - 脚本只使用 CUDA。没有 CUDA 时会直接退出；MacBook 仅适合做参数、导入和文件检查。
 - `infer.py` 会优先用软链接让 OMNI-DC 原代码按硬编码路径找到 `ckpts/` 中的同名权重；如果目标路径已存在，不会覆盖。
+- 推理保存和评估读取使用同一 `.npy` 命名逻辑：HAMMER 保持原规则，ClearPose 使用 `set#scene#frame-stem.npy`，例如 `set2#scene4#000709-color.npy`。

@@ -14,10 +14,10 @@ Usage:
 Environment overrides:
   CHECKPOINT       OMNI-DC checkpoint. Default: ckpts/modelv1.1_best_72epochs.pt
   CKPT_DIR         Directory for dependency checkpoints. Default: ckpts
-  DATASET_PATH     HAMMER JSONL path. Default: data/HAMMER/test_filled_d435.jsonl
-  INTRINSICS_PATH  HAMMER intrinsics path. Default: data/HAMMER/intrinsics.txt
+  DATASET_PATH     Dataset JSONL path for HAMMER or ClearPose. Default: data/HAMMER/test_filled_d435.jsonl
+  INTRINSICS_PATH  Camera intrinsics path. Default: data/HAMMER/intrinsics.txt
   OUTPUT_DIR       Base output root. Default: evaluation/output
-  RAW_TYPE         HAMMER raw depth source: d435, l515, tof. Default: d435
+  RAW_TYPE         Raw depth source: d435, l515, tof. Default: d435. ClearPose only supports d435
   BATCH_SIZE       Kept for compatibility; inference runs one image at a time. Default: 1
   NUM_WORKERS      Kept for compatibility. Default: 0
   SAVE_VIS         Save visualization grids by default. true/false. Default: true
@@ -26,7 +26,7 @@ Environment overrides:
   PYTHON_BIN       Python executable. Default: python
 
 Output layout:
-  OUTPUT_DIR/YYYY-mm-dd_HH-MM-SS/
+  OUTPUT_DIR/<hammer|clearpose>_YYYY-mm-dd_HH-MM-SS/
     args.json
     eval_args.json
     predictions/*.npy
@@ -74,7 +74,17 @@ ckpt_dir="$(resolve_path "${ckpt_dir}")"
 dataset_path="$(resolve_path "${dataset_path}")"
 intrinsics_path="$(resolve_path "${intrinsics_path}")"
 output_dir="$(resolve_path "${output_dir}")"
-run_output_dir="${output_dir}/${timestamp}"
+
+case "${dataset_path}" in
+    *clearpose*|*ClearPose*)
+        dataset_tag="clearpose"
+        ;;
+    *)
+        dataset_tag="hammer"
+        ;;
+esac
+
+run_output_dir="${output_dir}/${dataset_tag}_${timestamp}"
 prediction_dir="${run_output_dir}/predictions"
 visualization_dir="${run_output_dir}/visualizations"
 
@@ -83,6 +93,7 @@ echo "model: OMNI-DC OGNIDC v1.1"
 echo "checkpoint: ${checkpoint}"
 echo "ckpt dir: ${ckpt_dir}"
 echo "dataset path: ${dataset_path}"
+echo "dataset tag: ${dataset_tag}"
 echo "intrinsics path: ${intrinsics_path}"
 echo "raw type: ${raw_type}"
 echo "output root: ${output_dir}"
@@ -127,7 +138,7 @@ fi
 
 "${PYTHON_BIN}" "${infer_args[@]}"
 
-echo "evaluating the model on HAMMER"
+echo "evaluating the model on ${dataset_tag}"
 time "${PYTHON_BIN}" "${eval_args[@]}"
 
 if [[ "${cleanup_npy}" == "true" || "${cleanup_npy}" == "1" ]]; then

@@ -23,7 +23,7 @@ for path in (str(EVALUATION_DIR), str(SRC_DIR), str(SRC_DIR / "model")):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from dataset import HAMMERDataset
+from dataset import load_dataset_for_eval, resolve_sample_name
 
 
 def str2bool(value):
@@ -61,7 +61,7 @@ def torch_load_compatible(path, **kwargs):
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="OMNI-DC OGNIDC v1.1 inference for HAMMER evaluation",
+        description="OMNI-DC OGNIDC v1.1 inference for HAMMER/ClearPose evaluation",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -79,7 +79,7 @@ def parse_arguments():
     parser.add_argument(
         "--dataset",
         default="data/HAMMER/test_filled_d435.jsonl",
-        help="HAMMER JSONL dataset path",
+        help="HAMMER or ClearPose JSONL dataset path",
     )
     parser.add_argument(
         "--output",
@@ -95,7 +95,7 @@ def parse_arguments():
         "--raw-type",
         default="d435",
         choices=("d435", "l515", "tof"),
-        help="HAMMER raw depth source",
+        help="Raw depth source. ClearPose only supports d435",
     )
     parser.add_argument(
         "--depth-scale",
@@ -112,7 +112,7 @@ def parse_arguments():
     parser.add_argument(
         "--intrinsics-path",
         default="data/HAMMER/intrinsics.txt",
-        help="Path to HAMMER camera intrinsics. Supports 3x3 matrix, fx fy cx cy, or key=value text",
+        help="Path to camera intrinsics. Supports 3x3 matrix, fx fy cx cy, or key=value text",
     )
     parser.add_argument(
         "--batch-size",
@@ -352,12 +352,6 @@ def load_model(args):
     return model
 
 
-def sample_id_from_rgb_path(rgb_path):
-    parts = str(rgb_path).split("/")
-    scene_name = parts[-4]
-    return scene_name + "#" + Path(rgb_path).stem
-
-
 def load_rgb_tensor(rgb_path):
     image = Image.open(rgb_path).convert("RGB")
     transform = T.Compose(
@@ -512,10 +506,7 @@ def inference(args):
     if args.batch_size != 1:
         print("Warning: OMNI-DC adapter runs one image at a time; --batch-size is accepted for compatibility only.")
 
-    if "hammer" not in args.dataset.lower():
-        raise ValueError(f"Invalid dataset: {args.dataset}")
-
-    dataset = HAMMERDataset(args.dataset, args.raw_type)
+    dataset = load_dataset_for_eval(args.dataset, args.raw_type)
     total = len(dataset) if args.max_samples == 0 else min(len(dataset), args.max_samples)
     model = load_model(args)
     intrinsics_np = load_intrinsics(args.intrinsics_path)
@@ -526,7 +517,7 @@ def inference(args):
 
     for idx in tqdm(range(total), desc="OMNI-DC inference"):
         rgb_path, raw_depth_path, gt_depth_path = dataset[idx]
-        name = sample_id_from_rgb_path(rgb_path)
+        name = resolve_sample_name(rgb_path, args.dataset)
 
         rgb_tensor, rgb_np = load_rgb_tensor(rgb_path)
         raw_depth = load_depth_meters(raw_depth_path, args.depth_scale, args.max_depth)
