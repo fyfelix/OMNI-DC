@@ -33,6 +33,7 @@ src_bkup/
 
 # Local evaluation outputs
 evaluation/output/
+evaluation_ibims/output/
 
 # External local reference symlinks
 eval_pipeline
