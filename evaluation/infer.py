@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")
+
 import cv2
 import numpy as np
 import torch
@@ -23,7 +25,7 @@ for path in (str(EVALUATION_DIR), str(SRC_DIR), str(SRC_DIR / "model")):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from dataset import load_dataset_for_eval, resolve_sample_name
+from dataset import load_test_dataset, sample_name_for_dataset
 
 
 def str2bool(value):
@@ -61,7 +63,7 @@ def torch_load_compatible(path, **kwargs):
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="OMNI-DC OGNIDC v1.1 inference for HAMMER/ClearPose evaluation",
+        description="OMNI-DC OGNIDC v1.1 inference for HAMMER/ClearPose/DREDS evaluation",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -79,17 +81,17 @@ def parse_arguments():
     parser.add_argument(
         "--dataset",
         default="data/HAMMER/test_filled_d435.jsonl",
-        help="HAMMER or ClearPose JSONL dataset path",
+        help="HAMMER, ClearPose, or DREDS JSONL dataset path",
     )
     parser.add_argument(
         "--output",
         default="evaluation/output",
-        help="Run metadata output directory. Prediction/visualization directories fall back here when omitted",
+        help="Run metadata output directory. Prediction/visualization subdirectories are created here when omitted",
     )
     parser.add_argument(
         "--prediction-dir",
         default=None,
-        help="Directory for prediction .npy files. Defaults to --output",
+        help="Directory for prediction .npy files. Defaults to <output>/predictions",
     )
     parser.add_argument(
         "--raw-type",
@@ -172,7 +174,7 @@ def parse_arguments():
         "--vis-dir",
         dest="visualization_dir",
         default=None,
-        help="Visualization directory. Defaults to --output",
+        help="Visualization directory. Defaults to <output>/visualizations",
     )
     parser.add_argument(
         "--load-dav2",
@@ -262,11 +264,11 @@ def validate_inputs(args):
     args.output = str(resolve_project_path(args.output))
     args.ckpt_dir = str(resolve_project_path(args.ckpt_dir))
     if args.prediction_dir is None:
-        args.prediction_dir = args.output
+        args.prediction_dir = str(Path(args.output) / "predictions")
     else:
         args.prediction_dir = str(resolve_project_path(args.prediction_dir))
     if args.visualization_dir is None:
-        args.visualization_dir = args.output
+        args.visualization_dir = str(Path(args.output) / "visualizations")
     else:
         args.visualization_dir = str(resolve_project_path(args.visualization_dir))
 
@@ -417,7 +419,7 @@ def load_intrinsics(intrinsics_path):
 def load_gt_depth_for_vis(depth_path, depth_scale):
     depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
     if depth is None:
-        raise ValueError(f"Could not read GT depth: {depth_path}")
+        raise ValueError(f"Could not load GT depth from {depth_path}")
     depth = np.asarray(depth).astype(np.float32)
     if depth.ndim == 3:
         depth = depth[..., 0]
@@ -506,7 +508,11 @@ def inference(args):
     if args.batch_size != 1:
         print("Warning: OMNI-DC adapter runs one image at a time; --batch-size is accepted for compatibility only.")
 
-    dataset = load_dataset_for_eval(args.dataset, args.raw_type)
+    dataset, dataset_kind = load_test_dataset(args.dataset, args.raw_type)
+    args.dataset_kind = dataset_kind
+    if hasattr(dataset, "depth_scale"):
+        args.depth_scale = dataset.depth_scale
+
     total = len(dataset) if args.max_samples == 0 else min(len(dataset), args.max_samples)
     model = load_model(args)
     intrinsics_np = load_intrinsics(args.intrinsics_path)
@@ -517,7 +523,7 @@ def inference(args):
 
     for idx in tqdm(range(total), desc="OMNI-DC inference"):
         rgb_path, raw_depth_path, gt_depth_path = dataset[idx]
-        name = resolve_sample_name(rgb_path, args.dataset)
+        name = sample_name_for_dataset(dataset_kind, rgb_path)
 
         rgb_tensor, rgb_np = load_rgb_tensor(rgb_path)
         raw_depth = load_depth_meters(raw_depth_path, args.depth_scale, args.max_depth)
