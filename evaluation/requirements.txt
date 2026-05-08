@@ -3,6 +3,7 @@ matplotlib
 opencv-python
 openexr
 pillow
+scipy
 torch
 torchvision
 tqdm

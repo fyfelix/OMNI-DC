@@ -14,7 +14,7 @@ import torch
 from torch.utils.data import DataLoader, Dataset, Subset
 from tqdm import tqdm
 
-from dataset import load_test_dataset, sample_name_for_dataset
+from dataset import load_test_dataset, sample_name_for_sample
 from utils.metric import (
     abs_relative_difference,
     delta1_acc,
@@ -50,7 +50,7 @@ def parse_arguments():
         "--dataset",
         type=str,
         required=True,
-        help="HAMMER, ClearPose, or DREDS JSONL dataset path",
+        help="HAMMER, ClearPose, DREDS, or TRansPose JSONL dataset path",
     )
     parser.add_argument(
         "--output",
@@ -69,7 +69,10 @@ def parse_arguments():
         type=str,
         required=True,
         choices=["d435", "l515", "tof"],
-        help="Raw type. ClearPose only supports d435; DREDS ignores this value",
+        help=(
+            "Raw type. ClearPose only supports d435; "
+            "TRansPose only supports l515; DREDS ignores this value"
+        ),
     )
     parser.add_argument(
         "--input-size", type=int, default=518, help="Input size for inference"
@@ -159,7 +162,7 @@ class EvalDataset(Dataset):
             self.args.min_depth,
         )
 
-        name = sample_name_for_dataset(self.args.dataset_kind, sample[0])
+        name = sample_name_for_sample(self.args.dataset_kind, sample)
         pred_path = join(self.prediction_path, name + ".npy")
         if not exists(pred_path):
             pred_path = join(self.legacy_prediction_path, name + ".npy")

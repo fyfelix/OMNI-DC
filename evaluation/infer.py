@@ -25,7 +25,7 @@ for path in (str(EVALUATION_DIR), str(SRC_DIR), str(SRC_DIR / "model")):
     if path not in sys.path:
         sys.path.insert(0, path)
 
-from dataset import load_test_dataset, sample_name_for_dataset
+from dataset import load_test_dataset, sample_name_for_sample
 
 
 def str2bool(value):
@@ -63,7 +63,10 @@ def torch_load_compatible(path, **kwargs):
 
 def parse_arguments():
     parser = argparse.ArgumentParser(
-        description="OMNI-DC OGNIDC v1.1 inference for HAMMER/ClearPose/DREDS evaluation",
+        description=(
+            "OMNI-DC OGNIDC v1.1 inference for "
+            "HAMMER/ClearPose/DREDS/TRansPose evaluation"
+        ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -81,7 +84,7 @@ def parse_arguments():
     parser.add_argument(
         "--dataset",
         default="data/HAMMER/test_filled_d435.jsonl",
-        help="HAMMER, ClearPose, or DREDS JSONL dataset path",
+        help="HAMMER, ClearPose, DREDS, or TRansPose JSONL dataset path",
     )
     parser.add_argument(
         "--output",
@@ -97,7 +100,10 @@ def parse_arguments():
         "--raw-type",
         default="d435",
         choices=("d435", "l515", "tof"),
-        help="Raw depth source. ClearPose only supports d435",
+        help=(
+            "Raw depth source. ClearPose only supports d435; "
+            "TRansPose only supports l515"
+        ),
     )
     parser.add_argument(
         "--depth-scale",
@@ -177,6 +183,35 @@ def parse_arguments():
         help="Visualization directory. Defaults to <output>/visualizations",
     )
     parser.add_argument(
+        "--pc-rot-x-deg",
+        type=float,
+        default=25.0,
+        help="Point cloud view rotation around X axis in degrees",
+    )
+    parser.add_argument(
+        "--pc-rot-y-deg",
+        type=float,
+        default=15.0,
+        help="Point cloud view rotation around Y axis in degrees",
+    )
+    parser.add_argument(
+        "--pc-knn-k",
+        type=int,
+        default=16,
+        help="KNN neighbors for predicted point cloud floater filtering",
+    )
+    parser.add_argument(
+        "--pc-knn-std-ratio",
+        type=float,
+        default=2.0,
+        help="Mean-distance std ratio threshold for predicted point cloud filtering",
+    )
+    parser.add_argument(
+        "--disable-pc-knn-filter",
+        action="store_true",
+        help="Disable KNN filtering for predicted point cloud visualization",
+    )
+    parser.add_argument(
         "--load-dav2",
         type=str2bool,
         default=True,
@@ -186,6 +221,10 @@ def parse_arguments():
     args = parser.parse_args()
     if args.max_samples < 0:
         parser.error("--max-samples must be 0 or a positive integer")
+    if args.save_vis and args.pc_knn_k < 1:
+        parser.error("--pc-knn-k must be greater than 0")
+    if args.save_vis and args.pc_knn_std_ratio < 0:
+        parser.error("--pc-knn-std-ratio must be non-negative")
     return args
 
 
@@ -299,7 +338,7 @@ def validate_inputs(args):
         print("  - ckpts/pvt.pth")
         if args.load_dav2:
             print("  - ckpts/depth_anything_v2_vitl.pth")
-        print("  - data/HAMMER/intrinsics.txt")
+        print("  - data/HAMMER/intrinsics.txt or data/TRansPose/sequences/intrinsics.txt")
         raise SystemExit(1)
 
     if not torch.cuda.is_available():
@@ -438,21 +477,281 @@ def colorize_depth(depth, image_min, image_max):
     return colored.astype(np.uint8)
 
 
-def save_visualization(rgb, raw_depth, pred_depth, gt_depth, output_path, image_min, image_max):
-    panels = [
-        rgb.astype(np.uint8),
-        colorize_depth(raw_depth, image_min, image_max),
-        colorize_depth(pred_depth, image_min, image_max),
-        colorize_depth(gt_depth, image_min, image_max),
-    ]
-    height, width = panels[0].shape[:2]
-    resized = [
-        np.asarray(Image.fromarray(panel).resize((width, height), resample=Image.BILINEAR))
-        for panel in panels
-    ]
-    top = np.concatenate(resized[:2], axis=1)
-    bottom = np.concatenate(resized[2:], axis=1)
-    grid = np.concatenate([top, bottom], axis=0)
+def image_grid(imgs, rows, cols):
+    if not imgs:
+        return None
+    if len(imgs) != rows * cols:
+        raise ValueError(f"Expected {rows * cols} images, got {len(imgs)}")
+
+    height, width = imgs[0].shape[:2]
+    grid = Image.new("RGB", size=(cols * width, rows * height))
+    for idx, img in enumerate(imgs):
+        col_idx = idx % cols
+        row_idx = idx // cols
+        panel = np.asarray(img).astype(np.uint8)
+        if panel.ndim == 2:
+            panel = np.repeat(panel[:, :, None], 3, axis=2)
+        if panel.shape[:2] != (height, width):
+            panel = np.asarray(
+                Image.fromarray(panel).resize((width, height), resample=Image.BILINEAR)
+            )
+        grid.paste(Image.fromarray(panel), box=(col_idx * width, row_idx * height))
+    return np.asarray(grid)
+
+
+def scale_intrinsics(intrinsics, orig_hw, new_hw):
+    sy = new_hw[0] / orig_hw[0]
+    sx = new_hw[1] / orig_hw[1]
+    scaled = intrinsics.copy()
+    scaled[0, :] *= sx
+    scaled[1, :] *= sy
+    return scaled
+
+
+def resize_to(image, target_hw):
+    target_h, target_w = target_hw
+    if image.shape[0] == target_h and image.shape[1] == target_w:
+        return image
+    return cv2.resize(image, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+
+
+def filter_pointcloud_knn(points, colors, k=16, std_ratio=2.0):
+    if k < 1 or points.shape[0] <= k:
+        return points, colors
+
+    try:
+        from scipy.spatial import cKDTree
+    except ImportError:
+        return points, colors
+
+    neighbor_count = min(k + 1, points.shape[0])
+    try:
+        tree = cKDTree(points)
+        try:
+            distances, _ = tree.query(points, k=neighbor_count, workers=-1)
+        except TypeError:
+            distances, _ = tree.query(points, k=neighbor_count)
+    except Exception:
+        return points, colors
+
+    if distances.ndim == 1:
+        return points, colors
+
+    mean_distances = distances[:, 1:].mean(axis=1)
+    finite = np.isfinite(mean_distances)
+    if not finite.any():
+        return points, colors
+
+    valid_mean_distances = mean_distances[finite]
+    threshold = valid_mean_distances.mean() + std_ratio * valid_mean_distances.std()
+    keep = finite & (mean_distances <= threshold)
+    if not keep.any():
+        return points, colors
+    return points[keep], colors[keep]
+
+
+def render_pointcloud_reproject(
+    depth_map,
+    intrinsics,
+    rgb_img,
+    rot_x_deg=25.0,
+    rot_y_deg=15.0,
+    bg_color=(255, 255, 255),
+    knn_filter=True,
+    knn_k=16,
+    knn_std_ratio=2.0,
+):
+    depth_map = np.asarray(depth_map, dtype=np.float32).squeeze()
+    height, width = depth_map.shape
+    rgb_img = resize_to(np.asarray(rgb_img), (height, width))
+    rgb_img = np.clip(rgb_img, 0, 255).astype(np.uint8)
+
+    fx, fy = intrinsics[0, 0], intrinsics[1, 1]
+    cx, cy = intrinsics[0, 2], intrinsics[1, 2]
+    if abs(fx) < 1e-8 or abs(fy) < 1e-8:
+        return np.full((height, width, 3), bg_color, dtype=np.uint8)
+
+    u, v = np.meshgrid(np.arange(width), np.arange(height))
+    valid = (depth_map > 1e-8) & np.isfinite(depth_map)
+    if not valid.any():
+        return np.full((height, width, 3), bg_color, dtype=np.uint8)
+
+    z = depth_map[valid]
+    x = (u[valid] - cx) * z / fx
+    y = (v[valid] - cy) * z / fy
+    points = np.stack([x, y, z], axis=-1).astype(np.float32, copy=False)
+    colors = rgb_img[valid]
+    if knn_filter:
+        points, colors = filter_pointcloud_knn(
+            points,
+            colors,
+            k=knn_k,
+            std_ratio=knn_std_ratio,
+        )
+
+    center = points.mean(axis=0)
+    points_centered = points - center
+
+    rx = np.radians(rot_x_deg)
+    ry = np.radians(rot_y_deg)
+    cos_x, sin_x = np.cos(rx), np.sin(rx)
+    cos_y, sin_y = np.cos(ry), np.sin(ry)
+
+    x1 = points_centered[:, 0]
+    y1 = points_centered[:, 1] * cos_x - points_centered[:, 2] * sin_x
+    z1 = points_centered[:, 1] * sin_x + points_centered[:, 2] * cos_x
+    x2 = x1 * cos_y + z1 * sin_y
+    y2 = y1
+    z2 = -x1 * sin_y + z1 * cos_y
+    points_rot = np.stack([x2, y2, z2], axis=-1) + center
+    z_new = points_rot[:, 2]
+    keep = z_new > 1e-4
+    if not keep.any():
+        return np.full((height, width, 3), bg_color, dtype=np.uint8)
+
+    u_proj = points_rot[keep, 0] * fx / z_new[keep] + cx
+    v_proj = points_rot[keep, 1] * fy / z_new[keep] + cy
+    z_buf = z_new[keep]
+    c_buf = colors[keep]
+
+    pad = int(max(height, width) * 0.3)
+    canvas_h, canvas_w = height + 2 * pad, width + 2 * pad
+    ui = np.round(u_proj + pad).astype(np.int32)
+    vi = np.round(v_proj + pad).astype(np.int32)
+
+    in_bounds = (ui >= 0) & (ui < canvas_w) & (vi >= 0) & (vi < canvas_h)
+    ui = ui[in_bounds]
+    vi = vi[in_bounds]
+    z_buf = z_buf[in_bounds]
+    c_buf = c_buf[in_bounds]
+    if ui.size == 0:
+        return np.full((height, width, 3), bg_color, dtype=np.uint8)
+
+    order = np.argsort(-z_buf)
+    ui = ui[order]
+    vi = vi[order]
+    c_buf = c_buf[order]
+
+    canvas = np.full((canvas_h, canvas_w, 3), bg_color, dtype=np.uint8)
+    canvas[vi, ui] = c_buf
+
+    filled = np.zeros((canvas_h, canvas_w), dtype=np.uint8)
+    filled[vi, ui] = 255
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    filled_dilated = cv2.dilate(filled, kernel, iterations=1)
+    holes = (filled_dilated > 0) & (filled == 0)
+    if holes.any():
+        for channel_idx in range(3):
+            blurred = cv2.blur(canvas[:, :, channel_idx].astype(np.float32), (3, 3))
+            canvas[:, :, channel_idx][holes] = blurred[holes].astype(np.uint8)
+
+    rows = np.any(filled_dilated > 0, axis=1)
+    cols = np.any(filled_dilated > 0, axis=0)
+    if rows.any() and cols.any():
+        row_min, row_max = np.where(rows)[0][[0, -1]]
+        col_min, col_max = np.where(cols)[0][[0, -1]]
+        margin = 10
+        row_min = max(0, row_min - margin)
+        row_max = min(canvas_h - 1, row_max + margin)
+        col_min = max(0, col_min - margin)
+        col_max = min(canvas_w - 1, col_max + margin)
+        canvas = canvas[row_min : row_max + 1, col_min : col_max + 1]
+
+    return resize_to(canvas, (height, width)).astype(np.uint8)
+
+
+def create_visualizationv2(
+    rgb,
+    raw_depth,
+    pred_depth,
+    gt_depth,
+    image_min,
+    image_max,
+    intrinsics,
+    pc_rot_x_deg=25.0,
+    pc_rot_y_deg=15.0,
+    pc_knn_k=16,
+    pc_knn_std_ratio=2.0,
+    disable_pc_knn_filter=False,
+):
+    rgb_display = np.asarray(rgb)
+    if rgb_display.dtype != np.uint8:
+        if np.nanmax(rgb_display) <= 1.0:
+            rgb_display = rgb_display * 255.0
+        rgb_display = np.clip(rgb_display, 0, 255).astype(np.uint8)
+
+    target_hw = rgb_display.shape[:2]
+    raw_depth = resize_to(np.asarray(raw_depth, dtype=np.float32), target_hw)
+    pred_depth = resize_to(np.asarray(pred_depth, dtype=np.float32), target_hw)
+    gt_depth = resize_to(np.asarray(gt_depth, dtype=np.float32), target_hw)
+
+    pred_pointcloud = render_pointcloud_reproject(
+        pred_depth,
+        intrinsics,
+        rgb_display,
+        rot_x_deg=pc_rot_x_deg,
+        rot_y_deg=pc_rot_y_deg,
+        knn_filter=not disable_pc_knn_filter,
+        knn_k=pc_knn_k,
+        knn_std_ratio=pc_knn_std_ratio,
+    )
+    gt_pointcloud = render_pointcloud_reproject(
+        gt_depth,
+        intrinsics,
+        rgb_display,
+        rot_x_deg=pc_rot_x_deg,
+        rot_y_deg=pc_rot_y_deg,
+        knn_filter=False,
+    )
+
+    return image_grid(
+        [
+            rgb_display,
+            colorize_depth(raw_depth, image_min, image_max),
+            colorize_depth(pred_depth, image_min, image_max),
+            colorize_depth(gt_depth, image_min, image_max),
+            pred_pointcloud,
+            gt_pointcloud,
+        ],
+        3,
+        2,
+    )
+
+
+def save_visualization(
+    rgb,
+    raw_depth,
+    pred_depth,
+    gt_depth,
+    output_path,
+    image_min,
+    image_max,
+    intrinsics,
+    pc_rot_x_deg=25.0,
+    pc_rot_y_deg=15.0,
+    pc_knn_k=16,
+    pc_knn_std_ratio=2.0,
+    disable_pc_knn_filter=False,
+):
+    scaled_intrinsics = scale_intrinsics(
+        intrinsics,
+        rgb.shape[:2],
+        rgb.shape[:2],
+    )
+    grid = create_visualizationv2(
+        rgb,
+        raw_depth,
+        pred_depth,
+        gt_depth,
+        image_min,
+        image_max,
+        scaled_intrinsics,
+        pc_rot_x_deg=pc_rot_x_deg,
+        pc_rot_y_deg=pc_rot_y_deg,
+        pc_knn_k=pc_knn_k,
+        pc_knn_std_ratio=pc_knn_std_ratio,
+        disable_pc_knn_filter=disable_pc_knn_filter,
+    )
     Image.fromarray(grid).save(output_path)
 
 
@@ -522,8 +821,9 @@ def inference(args):
         json.dump(vars(args), file, indent=2, ensure_ascii=False)
 
     for idx in tqdm(range(total), desc="OMNI-DC inference"):
-        rgb_path, raw_depth_path, gt_depth_path = dataset[idx]
-        name = sample_name_for_dataset(dataset_kind, rgb_path)
+        sample = dataset[idx]
+        rgb_path, raw_depth_path, gt_depth_path = sample[:3]
+        name = sample_name_for_sample(dataset_kind, sample)
 
         rgb_tensor, rgb_np = load_rgb_tensor(rgb_path)
         raw_depth = load_depth_meters(raw_depth_path, args.depth_scale, args.max_depth)
@@ -542,6 +842,12 @@ def inference(args):
                 Path(args.visualization_dir) / f"{name}_promptda_vis.jpg",
                 args.image_min,
                 args.image_max,
+                intrinsics_np,
+                pc_rot_x_deg=args.pc_rot_x_deg,
+                pc_rot_y_deg=args.pc_rot_y_deg,
+                pc_knn_k=args.pc_knn_k,
+                pc_knn_std_ratio=args.pc_knn_std_ratio,
+                disable_pc_knn_filter=args.disable_pc_knn_filter,
             )
 
 
