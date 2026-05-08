@@ -322,7 +322,7 @@ def validate_inputs(args):
         missing.append(args.dataset)
     if not Path(args.model_path).exists():
         missing.append(args.model_path)
-    if not Path(args.intrinsics_path).exists():
+    if args.save_vis and not Path(args.intrinsics_path).exists():
         missing.append(args.intrinsics_path)
 
     link_missing = prepare_weight_links(Path(args.ckpt_dir), args.load_dav2)
@@ -338,7 +338,8 @@ def validate_inputs(args):
         print("  - ckpts/pvt.pth")
         if args.load_dav2:
             print("  - ckpts/depth_anything_v2_vitl.pth")
-        print("  - data/HAMMER/intrinsics.txt or data/TRansPose/sequences/intrinsics.txt")
+        if args.save_vis:
+            print("  - data/HAMMER/intrinsics.txt or data/TRansPose/sequences/intrinsics.txt")
         raise SystemExit(1)
 
     if not torch.cuda.is_available():
@@ -453,6 +454,20 @@ def load_intrinsics(intrinsics_path):
         f"Unsupported intrinsics format in {intrinsics_path}. "
         "Expected 3x3 matrix, 4 values 'fx fy cx cy', or fx/fy/cx/cy key-value lines."
     )
+
+
+def load_intrinsics_for_inference(args):
+    if Path(args.intrinsics_path).exists():
+        return load_intrinsics(args.intrinsics_path)
+
+    if args.save_vis:
+        raise FileNotFoundError(f"Intrinsics path does not exist: {args.intrinsics_path}")
+
+    print(
+        "Warning: intrinsics path does not exist and save_vis is disabled; "
+        "using identity K for OMNI-DC inference."
+    )
+    return np.eye(3, dtype=np.float32)
 
 
 def load_gt_depth_for_vis(depth_path, depth_scale):
@@ -814,7 +829,7 @@ def inference(args):
 
     total = len(dataset) if args.max_samples == 0 else min(len(dataset), args.max_samples)
     model = load_model(args)
-    intrinsics_np = load_intrinsics(args.intrinsics_path)
+    intrinsics_np = load_intrinsics_for_inference(args)
     intrinsics = torch.from_numpy(intrinsics_np).reshape(1, 3, 3).cuda()
 
     with open(Path(args.output) / "args.json", "w", encoding="utf-8") as file:

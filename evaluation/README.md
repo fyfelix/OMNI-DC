@@ -41,7 +41,7 @@ ckpts/
 data/HAMMER/intrinsics.txt
 ```
 
-支持 `fx fy cx cy`、`fx=...` 风格 key-value，或 3x3 矩阵。HAMMER、ClearPose、DREDS、TRansPose 四条路线都会把该内参作为 `sample["K"]` 传给 OGNIDC；如使用其他数据集路径，请通过 `INTRINSICS_PATH` 覆盖。TRansPose wrapper 的默认内参路径是 `data/TRansPose/sequences/intrinsics.txt`。
+支持 `fx fy cx cy`、`fx=...` 风格 key-value，或 3x3 矩阵。HAMMER、ClearPose、DREDS、TRansPose 四条路线都会把该内参作为 `sample["K"]` 传给 OGNIDC；如使用其他数据集路径，请通过 `INTRINSICS_PATH` 覆盖。`SAVE_VIS=false` 且内参文件不存在时，推理会使用 identity `K` 继续运行；`SAVE_VIS=true` 会强制要求有效内参以生成点云可视化。TRansPose wrapper 的默认内参路径是 `data/TRansPose/sequences/intrinsics.txt`。
 
 ## 数据集格式
 
@@ -162,7 +162,7 @@ bash evaluation/run_transpose.sh ckpts/modelv1.1_best_72epochs.pt l515
 bash evaluation/run_transpose.sh [checkpoint] [camera_type=l515]
 ```
 
-TRansPose 固定使用 `raw_type=l515`。默认 JSONL 为 `data/TRansPose/sequences/dc_testset.jsonl`，默认内参为 `data/TRansPose/sequences/intrinsics.txt`，默认输出目录为 `<checkpoint_dir>/transpose_<checkpoint_stub>_data_l515/`。`SAVE_VIS=true` 时会保存 3x2 可视化网格。
+TRansPose 固定使用 `raw_type=l515`。默认 JSONL 为 `data/TRansPose/sequences/dc_testset.jsonl`，默认内参为 `data/TRansPose/sequences/intrinsics.txt`，默认输出目录为 `<checkpoint_dir>/transpose_<checkpoint_stub>_data_l515/`。`SAVE_VIS=true` 时会保存 3x2 可视化网格并要求内参文件存在；`SAVE_VIS=false` 时缺失内参会回退到 identity `K`。
 
 ## 常用环境变量
 
@@ -217,5 +217,5 @@ mean_metrics_<timestamp>_False.json
 - DREDS 评估允许 prediction shape 与 GT shape 不一致，并用 nearest resize 对齐；HAMMER / ClearPose 遇到 shape mismatch 会直接报错。
 - TRansPose 推理和评估都通过 `seq_name` 查找同一个 `<seq_name>.npy`，避免按 RGB 路径推导名称导致不一致。
 - `--save-vis` 会生成 RGB、raw depth、prediction、GT depth、prediction point cloud、GT point cloud 的 3x2 网格。prediction 点云默认启用 KNN floater 过滤，依赖 `scipy`；GT 点云不启用 KNN 过滤。
-- OMNI-DC 推理始终需要有效内参文件，因为模型输入会使用 `sample["K"]`；`SAVE_VIS=true` 只额外启用点云可视化参数。
-- 端到端推理需要 CUDA、checkpoint、依赖权重、数据集和内参文件齐备；Mac 本地通常只适合做 help、导入和语法检查。
+- `SAVE_VIS=false` 时缺失内参文件会使用 identity `K` 继续推理；`SAVE_VIS=true` 时需要有效内参文件来生成点云可视化。
+- 端到端推理需要 CUDA、checkpoint、依赖权重和数据集齐备；启用可视化时还需要内参文件。Mac 本地通常只适合做 help、导入和语法检查。
