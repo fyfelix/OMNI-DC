@@ -7,7 +7,7 @@ evaluation/
   run_hammer.sh
   run_clearpose.sh
   run_dreds.sh
-  run_bs_transpose.sh
+  run_transpose.sh
   infer.py
   eval.py
   dataset.py
@@ -153,17 +153,16 @@ bash evaluation/run_dreds.sh [checkpoint] [variant=all]
 ```bash
 DATASET_PATH=data/TRansPose/sequences/dc_testset.jsonl \
 INTRINSICS_PATH=data/TRansPose/sequences/intrinsics.txt \
-SAVE_VIS=false \
-bash evaluation/run_bs_transpose.sh ckpts/modelv1.1_best_72epochs.pt l515
+bash evaluation/run_transpose.sh ckpts/modelv1.1_best_72epochs.pt l515
 ```
 
 参数：
 
 ```text
-bash evaluation/run_bs_transpose.sh [checkpoint] [camera_type=l515]
+bash evaluation/run_transpose.sh [checkpoint] [camera_type=l515]
 ```
 
-TRansPose 固定使用 `raw_type=l515`。默认 JSONL 为 `data/TRansPose/sequences/dc_testset.jsonl`，默认内参为 `data/TRansPose/sequences/intrinsics.txt`，默认输出目录为 `<checkpoint_dir>/transpose_<dataset_stub>_<checkpoint_stub>_data_l515/`。`SAVE_VIS=true` 时会保存 3x2 可视化网格。
+TRansPose 固定使用 `raw_type=l515`。默认 JSONL 为 `data/TRansPose/sequences/dc_testset.jsonl`，默认内参为 `data/TRansPose/sequences/intrinsics.txt`，默认输出目录为 `<checkpoint_dir>/transpose_<checkpoint_stub>_data_l515/`。`SAVE_VIS=true` 时会保存 3x2 可视化网格。
 
 ## 常用环境变量
 
@@ -178,8 +177,8 @@ OUTPUT_DIR          单数据集输出目录
 OUTPUT_ROOT         DREDS all 模式的输出根目录
 BATCH_SIZE          兼容参数；OMNI-DC 当前逐张推理，默认 1
 NUM_WORKERS         兼容参数，默认 0
-SAVE_VIS            是否保存可视化，HAMMER/ClearPose/DREDS 默认 true，TRansPose 默认 false
-CLEANUP_NPY         是否在评估后删除 predictions/*.npy，TRansPose 默认 true，其他 wrapper 默认 false
+SAVE_VIS            是否保存可视化，默认 true
+CLEANUP_NPY         是否在评估后删除 predictions/*.npy，默认 false
 MAX_SAMPLES         样本上限，0 表示全量，默认 0
 PYTHON_BIN          Python 可执行文件，默认 python
 ```
@@ -193,7 +192,7 @@ PYTHON_BIN          Python 可执行文件，默认 python
 <checkpoint_dir>/clearpose_<checkpoint_stub>_data_d435/
 <checkpoint_dir>/dreds_catknown_<checkpoint_stub>/
 <checkpoint_dir>/dreds_catnovel_<checkpoint_stub>/
-<checkpoint_dir>/transpose_<dataset_stub>_<checkpoint_stub>_data_l515/
+<checkpoint_dir>/transpose_<checkpoint_stub>_data_l515/
 ```
 
 输出内容：

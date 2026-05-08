@@ -9,11 +9,11 @@ PYTHON_BIN="${PYTHON_BIN:-python}"
 usage() {
     cat <<'EOF'
 Usage:
-  bash evaluation/run_bs_transpose.sh [checkpoint] [camera_type=l515]
+  bash evaluation/run_transpose.sh [checkpoint] [camera_type=l515]
 
 Arguments:
   checkpoint       OMNI-DC checkpoint. Default: CHECKPOINT or ckpts/modelv1.1_best_72epochs.pt
-  camera_type      Raw depth source. TRansPose only supports l515.
+  camera_type      Raw depth source: l515. Default: RAW_TYPE or l515
 
 Environment overrides:
   CHECKPOINT       OMNI-DC checkpoint. Default: ckpts/modelv1.1_best_72epochs.pt
@@ -23,14 +23,12 @@ Environment overrides:
   OUTPUT_DIR       Prediction/evaluation output directory.
   BATCH_SIZE       Kept for compatibility; inference runs one image at a time. Default: 1
   NUM_WORKERS      Kept for compatibility. Default: 0
-  SAVE_VIS         Save 3x2 visualization grids. true/false. Default: false
-  CLEANUP_NPY      Remove predictions/*.npy after evaluation. true/false. Default: true
+  SAVE_VIS         Save 3x2 visualization grids. true/false. Default: true
+  CLEANUP_NPY      Remove predictions/*.npy after evaluation. true/false. Default: false
   MAX_SAMPLES      Sample limit. 0 evaluates all samples. Default: 0
   PYTHON_BIN       Python executable. Default: python
 
-TRansPose is fixed to raw-type=l515. RGB, l515_depth, and depth paths are
-loaded from per-sample JSONL rows; seq_name is used as the prediction filename
-when present.
+TRansPose is fixed to raw-type=l515.
 EOF
 }
 
@@ -55,14 +53,18 @@ dataset_path="${DATASET_PATH:-data/TRansPose/sequences/dc_testset.jsonl}"
 intrinsics_path="${INTRINSICS_PATH:-data/TRansPose/sequences/intrinsics.txt}"
 batch_size="${BATCH_SIZE:-1}"
 num_workers="${NUM_WORKERS:-0}"
-save_vis="${SAVE_VIS:-false}"
-cleanup_npy="${CLEANUP_NPY:-true}"
+save_vis="${SAVE_VIS:-true}"
+cleanup_npy="${CLEANUP_NPY:-false}"
 max_samples="${MAX_SAMPLES:-0}"
 
-if [[ "${camera_type}" != "l515" ]]; then
-    echo "TRansPose dataset only supports l515 raw type, got ${camera_type}" >&2
-    exit 2
-fi
+case "${camera_type}" in
+    l515)
+        ;;
+    *)
+        echo "unknown TRansPose camera_type: ${camera_type} (expected: l515)" >&2
+        exit 2
+        ;;
+esac
 
 checkpoint="$(resolve_path "${checkpoint}")"
 ckpt_dir="$(resolve_path "${ckpt_dir}")"
@@ -72,16 +74,14 @@ intrinsics_path="$(resolve_path "${intrinsics_path}")"
 model_name="$(basename "${checkpoint}")"
 model_stub="${model_name%%.*}"
 model_dir="$(dirname "${checkpoint}")"
-dataset_name="$(basename "${dataset_path}")"
-dataset_stub="${dataset_name%%.*}"
-output_dir="${OUTPUT_DIR:-${model_dir}/transpose_${dataset_stub}_${model_stub}_data_${camera_type}}"
+output_dir="${OUTPUT_DIR:-${model_dir}/transpose_${model_stub}_data_${camera_type}}"
 output_dir="$(resolve_path "${output_dir}")"
 
 save_vis_arg=()
-if [[ "${save_vis}" == "true" || "${save_vis}" == "1" ]]; then
-    save_vis_arg=(--save-vis)
-else
+if [[ "${save_vis}" == "false" || "${save_vis}" == "0" ]]; then
     save_vis_arg=(--no-save-vis)
+else
+    save_vis_arg=(--save-vis)
 fi
 
 echo "project root: ${PROJECT_ROOT}"
